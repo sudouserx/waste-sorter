@@ -4,7 +4,7 @@ POST /predict   multipart: file=<jpeg/png>, optional session_id=<str> (live-feed
 GET  /health    liveness + model info
 GET  /bins      bin names / display strings
 
-Env: WASTE_CKPT, WASTE_API_KEY, WASTE_USE_CLIP (1/0), WASTE_W_SUP, WASTE_CONF
+Env: WASTE_CKPT, WASTE_API_KEY, WASTE_USE_CLIP (1/0), WASTE_W_SUP, WASTE_CONF, WASTE_NO_ITEM, WASTE_CLIP_AGG
 """
 import hmac
 import os
@@ -30,6 +30,8 @@ async def lifespan(app: FastAPI):
         use_clip=os.environ.get("WASTE_USE_CLIP", "1") == "1",
         w_supervised=float(os.environ.get("WASTE_W_SUP", "0.6")),
         conf_threshold=float(os.environ.get("WASTE_CONF", "0.5")),
+        no_item_threshold=float(os.environ.get("WASTE_NO_ITEM", "0.6")),
+        clip_agg=os.environ.get("WASTE_CLIP_AGG", "sum"),
     )
     state["predictor"] = WastePredictor(cfg)
     yield

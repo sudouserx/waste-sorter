@@ -2,6 +2,11 @@
 
 python -m wastesorter.train --out /kaggle/working/ckpt --data-dir /kaggle/working/data
 Outputs: best.pt (weights + metadata + temperature), metrics.json, confusion_matrix.png, splits.json
+
+Diagnostics:
+  --split-mode random                       reproduces the first run's split (compare with chunked to detect leakage)
+  --train-sources realwaste --cross-eval-source trashnet
+                                            train on one source, test on the other (true domain-shift number)
 """
 from __future__ import annotations
 
@@ -44,6 +49,10 @@ def parse_args():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--no-pretrained", action="store_true")
     p.add_argument("--max-per-group", type=int, default=0, help="debug: cap images per (source,class)")
+    p.add_argument("--split-mode", choices=["chunked", "random"], default="chunked")
+    p.add_argument("--train-sources", default="trashnet,realwaste", help="comma list of sources used for train/val/test")
+    p.add_argument("--cross-eval-source", default="", help="extra held-out source evaluated after training")
+    p.add_argument("--no-extra-aug", action="store_true", help="disable perspective/blur augmentation")
     return p.parse_args()
 
 
@@ -51,18 +60,16 @@ def set_seed(s):
     random.seed(s); np.random.seed(s); torch.manual_seed(s); torch.cuda.manual_seed_all(s)
 
 
-def make_transforms(size, mean, std):
+def make_transforms(size, mean, std, extra_aug=True):
     bicubic = T.InterpolationMode.BICUBIC
-    train = T.Compose([
-        T.RandomResizedCrop(size, scale=(0.55, 1.0), ratio=(0.85, 1.18), interpolation=bicubic),
-        T.RandomHorizontalFlip(),
-        T.TrivialAugmentWide(),
-        T.ToTensor(),
-        T.Normalize(mean, std),
-        T.RandomErasing(p=0.15),
-    ])
+    aug = [T.RandomResizedCrop(size, scale=(0.55, 1.0), ratio=(0.85, 1.18), interpolation=bicubic),
+           T.RandomHorizontalFlip()]
+    if extra_aug:  # phone-camera style variation: viewpoint change and slight blur
+        aug += [T.RandomPerspective(distortion_scale=0.2, p=0.3),
+                T.RandomApply([T.GaussianBlur(5, sigma=(0.1, 1.5))], p=0.2)]
+    aug += [T.TrivialAugmentWide(), T.ToTensor(), T.Normalize(mean, std), T.RandomErasing(p=0.15)]
     evalt = T.Compose([T.Resize((size, size), interpolation=bicubic), T.ToTensor(), T.Normalize(mean, std)])
-    return train, evalt
+    return T.Compose(aug), evalt
 
 
 @torch.no_grad()
@@ -83,10 +90,11 @@ def compute_metrics(logits, labels, sources):
     pred, y = logits.argmax(1).numpy(), labels.numpy()
     to_bin = np.array([BINS.index(MATERIAL_TO_BIN[m]) for m in MATERIALS])
     allc = list(range(len(MATERIALS)))
+    present = sorted(set(y.tolist()))  # macro-F1 only over classes that exist in this eval set
     res = {
         "n": int(len(y)),
         "accuracy": float(accuracy_score(y, pred)),
-        "macro_f1": float(f1_score(y, pred, average="macro", labels=allc, zero_division=0)),
+        "macro_f1": float(f1_score(y, pred, average="macro", labels=present, zero_division=0)),
         "bin_accuracy": float((to_bin[pred] == to_bin[y]).mean()),
         "per_source": {},
     }
@@ -100,6 +108,19 @@ def compute_metrics(logits, labels, sources):
     return res
 
 
+def print_report(tm):
+    r = tm["report"]
+    print(f"{'class':<10}{'prec':>7}{'rec':>7}{'f1':>7}{'n':>6}")
+    for m in MATERIALS:
+        x = r[m]
+        print(f"{m:<10}{x['precision']:>7.3f}{x['recall']:>7.3f}{x['f1-score']:>7.3f}{int(x['support']):>6}")
+    cm = np.array(tm["confusion_matrix"])
+    pairs = [(int(cm[i, j]), MATERIALS[i], MATERIALS[j]) for i in range(len(cm)) for j in range(len(cm)) if i != j and cm[i, j] > 0]
+    print("top confusions (true -> predicted):")
+    for n, t, p in sorted(pairs, reverse=True)[:6]:
+        print(f"  {t} -> {p}: {n}")
+
+
 def fit_temperature(logits, labels):
     log_t = torch.zeros(1, requires_grad=True)
     opt = torch.optim.LBFGS([log_t], lr=0.1, max_iter=50)
@@ -111,7 +132,7 @@ def fit_temperature(logits, labels):
         return loss
 
     opt.step(closure)
-    return float(log_t.exp().clamp(0.2, 5.0))
+    return float(log_t.detach().exp().clamp(0.2, 5.0).item())
 
 
 def plot_confusion(cm, path):
@@ -140,24 +161,29 @@ def main():
     amp = device.type == "cuda"
     torch.backends.cudnn.benchmark = True
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
-    print(f"device={device} amp={amp}")
+    print(f"device={device} amp={amp} split_mode={a.split_mode}")
 
-    samples = get_samples(a.data_dir, a.trashnet_dir, a.realwaste_dir)
+    all_samples = get_samples(a.data_dir, a.trashnet_dir, a.realwaste_dir)
     if a.max_per_group:
-        samples = subsample(samples, a.max_per_group, a.seed)
-    tr_s, va_s, te_s = split_samples(samples, seed=a.seed)
-    print(f"images: train={len(tr_s)} val={len(va_s)} test={len(te_s)}")
+        all_samples = subsample(all_samples, a.max_per_group, a.seed)
+    train_src = {x.strip() for x in a.train_sources.split(",") if x.strip()}
+    pool = [s for s in all_samples if s.source in train_src]
+    cross = [s for s in all_samples if a.cross_eval_source and s.source == a.cross_eval_source and s.source not in train_src]
+    if not pool:
+        raise SystemExit(f"no samples for --train-sources {a.train_sources}")
+    tr_s, va_s, te_s = split_samples(pool, seed=a.seed, mode=a.split_mode)
+    print(f"images: train={len(tr_s)} val={len(va_s)} test={len(te_s)} cross={len(cross)}")
     counts = np.bincount([s.label for s in tr_s], minlength=len(MATERIALS))
     print("train class counts:", dict(zip(MATERIALS, counts.tolist())))
-    (out / "splits.json").write_text(json.dumps({
-        k: [{"path": s.path, "label": s.label, "source": s.source} for s in v]
-        for k, v in {"train": tr_s, "val": va_s, "test": te_s}.items()}))
+    dump = lambda v: [{"path": s.path, "label": s.label, "source": s.source} for s in v]
+    (out / "splits.json").write_text(json.dumps({"train": dump(tr_s), "val": dump(va_s), "test": dump(te_s),
+                                                  "cross": dump(cross), "split_mode": a.split_mode}))
 
     model = timm.create_model(a.model, pretrained=not a.no_pretrained, num_classes=len(MATERIALS), drop_path_rate=0.1)
     model = model.to(device).to(memory_format=torch.channels_last)
     dc = timm.data.resolve_data_config({}, model=model)
     mean, std = list(dc["mean"]), list(dc["std"])
-    t_train, t_eval = make_transforms(a.img_size, mean, std)
+    t_train, t_eval = make_transforms(a.img_size, mean, std, extra_aug=not a.no_extra_aug)
 
     mk = lambda ss, tf, shuf: DataLoader(WasteDataset(ss, tf), batch_size=a.batch_size, shuffle=shuf,
                                          num_workers=a.workers, pin_memory=amp, drop_last=shuf,
@@ -165,7 +191,8 @@ def main():
     train_loader, val_loader, test_loader = mk(tr_s, t_train, True), mk(va_s, t_eval, False), mk(te_s, t_eval, False)
 
     w = (counts.sum() / np.maximum(counts, 1)) ** 0.5
-    w = torch.tensor(w / w.mean(), dtype=torch.float32, device=device)
+    w[counts == 0] = 0.0  # classes absent from the training sources get no weight
+    w = torch.tensor(w / w[counts > 0].mean(), dtype=torch.float32, device=device)
     crit = torch.nn.CrossEntropyLoss(weight=w, label_smoothing=a.label_smoothing)
 
     head = list(model.get_classifier().parameters())
@@ -223,13 +250,22 @@ def main():
     tl, ty = collect_logits(model, test_loader, device, amp)
     tm = compute_metrics(tl, ty, [s.source for s in te_s])
     tm["temperature"] = temp
+    tm["split_mode"] = a.split_mode
+    summary = {"split_mode": a.split_mode, "accuracy": tm["accuracy"], "macro_f1": tm["macro_f1"],
+               "bin_accuracy": tm["bin_accuracy"], "per_source": tm["per_source"]}
+    if cross:
+        cl, cy = collect_logits(model, mk(cross, t_eval, False), device, amp)
+        cm = compute_metrics(cl, cy, [s.source for s in cross])
+        tm["cross_domain"] = {k: cm[k] for k in ("n", "accuracy", "macro_f1", "bin_accuracy")}
+        tm["cross_domain"]["train_sources"] = sorted(train_src)
+        tm["cross_domain"]["eval_source"] = a.cross_eval_source
+        summary["cross_domain"] = tm["cross_domain"]
     (out / "metrics.json").write_text(json.dumps(tm, indent=2))
     plot_confusion(tm["confusion_matrix"], out / "confusion_matrix.png")
-    summary = {"accuracy": tm["accuracy"], "macro_f1": tm["macro_f1"], "bin_accuracy": tm["bin_accuracy"],
-               "per_source": tm["per_source"]}
     save(out / "best.pt", best_state, temp, summary)
+    print_report(tm)
     print("TEST:", json.dumps(summary, indent=2))
-    print(f"saved to {out/'best.pt'} (T={temp:.3f})")
+    print(f"saved to {out/'best.pt'} (fitted T={temp:.3f}; inference clamps T to >= 1.0 by default)")
 
 
 if __name__ == "__main__":

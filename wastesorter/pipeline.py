@@ -26,6 +26,8 @@ class PipelineConfig:
     conf_threshold: float = 0.5          # below this -> status "uncertain"
     no_item_threshold: float = 0.6       # CLIP "empty scene" probability above this -> "no_item"
     tta_flip: bool = True
+    clip_agg: str = "sum"               # "sum" | "max" (see clip_zeroshot.aggregate_prompts)
+    min_temperature: float = 1.0         # never sharpen probabilities beyond the raw model (OOD safety)
     smooth_alpha: float = 0.6            # weight of newest frame in live-feed smoothing
     smooth_ttl: float = 8.0              # seconds before a session's history expires
 
@@ -109,7 +111,7 @@ class WastePredictor:
         m = timm.create_model(ck["model_name"], pretrained=False, num_classes=len(self.classes))
         m.load_state_dict(ck["state_dict"])
         self.model = m.eval().to(self.device).to(memory_format=torch.channels_last)
-        self.temperature = float(ck.get("temperature", 1.0))
+        self.temperature = max(self.cfg.min_temperature, float(ck.get("temperature", 1.0)))
         self.class_to_bin = class_to_bin_matrix(self.classes)
         s = int(ck["img_size"])
         self.tf = T.Compose([
@@ -142,7 +144,7 @@ class WastePredictor:
 
         p_clip_bins, no_item, items = None, 0.0, []
         if self.clip is not None:
-            item_probs, out_probs = self.clip.predict([img])
+            item_probs, out_probs = self.clip.predict([img], agg=self.cfg.clip_agg)
             item_probs, out = item_probs[0], out_probs[0]
             no_item = float(out[-1])
             b = out[:-1]

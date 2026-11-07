@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import random
+import re
 import shutil
 import subprocess
 import zipfile
@@ -109,17 +110,54 @@ def subsample(samples: List[Sample], per_group: int, seed: int) -> List[Sample]:
     return out
 
 
-def split_samples(samples: List[Sample], val_frac=0.1, test_frac=0.1, seed=42) -> Tuple[List[Sample], List[Sample], List[Sample]]:
-    """Stratified by (source, class). NOTE: TrashNet photographs the same object from several angles,
-    so random splits can leak near-duplicates between train/test and inflate TrashNet accuracy."""
-    from sklearn.model_selection import train_test_split
+def _natural_key(path: str):
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", Path(path).name)]
 
-    idx = np.arange(len(samples))
-    strat = np.array([f"{s.source}|{s.label}" for s in samples])
-    tv, te = train_test_split(idx, test_size=test_frac, stratify=strat, random_state=seed)
-    tr, va = train_test_split(tv, test_size=val_frac / (1 - test_frac), stratify=strat[tv], random_state=seed)
-    pick = lambda ii: [samples[i] for i in ii]
-    return pick(tr), pick(va), pick(te)
+
+def split_samples(samples: List[Sample], val_frac=0.1, test_frac=0.1, seed=42, mode="chunked", chunk=25
+                  ) -> Tuple[List[Sample], List[Sample], List[Sample]]:
+    """Split into train/val/test.
+
+    mode="random":  stratified random split (what the first run used). Near-duplicate photos of the same
+                    object (TrashNet shoots each object from several angles) can land on both sides.
+    mode="chunked": within each (source, class), sort by natural filename order, cut into blocks of ~`chunk`
+                    consecutive files and assign whole blocks to a split. HEURISTIC: assumes consecutively
+                    numbered files were captured together. Unverified for both datasets, so compare the
+                    random vs chunked test accuracy; a big drop means leakage was inflating the numbers.
+    """
+    if mode == "random":
+        from sklearn.model_selection import train_test_split
+
+        idx = np.arange(len(samples))
+        strat = np.array([f"{s.source}|{s.label}" for s in samples])
+        tv, te = train_test_split(idx, test_size=test_frac, stratify=strat, random_state=seed)
+        tr, va = train_test_split(tv, test_size=val_frac / (1 - test_frac), stratify=strat[tv], random_state=seed)
+        pick = lambda ii: [samples[i] for i in ii]
+        return pick(tr), pick(va), pick(te)
+    if mode != "chunked":
+        raise ValueError(f"unknown split mode: {mode}")
+
+    rng = random.Random(seed)
+    strata = {}
+    for s in samples:
+        strata.setdefault((s.source, s.label), []).append(s)
+    tr: List[Sample] = []; va: List[Sample] = []; te: List[Sample] = []
+    for key in sorted(strata):
+        items = sorted(strata[key], key=lambda s: _natural_key(s.path))
+        n = len(items)
+        size = max(5, min(chunk, n // 10))
+        chunks = [items[i:i + size] for i in range(0, n, size)]
+        rng.shuffle(chunks)
+        n_te, n_va = round(n * test_frac), round(n * val_frac)
+        got_te = got_va = 0
+        for c in chunks:
+            if got_te < n_te:
+                te += c; got_te += len(c)
+            elif got_va < n_va:
+                va += c; got_va += len(c)
+            else:
+                tr += c
+    return tr, va, te
 
 
 class WasteDataset(Dataset):
