@@ -1,0 +1,13 @@
+torch
+torchvision
+timm
+open_clip_torch
+huggingface_hub
+scikit-learn
+matplotlib
+numpy
+Pillow
+fastapi
+uvicorn
+python-multipart
+requests
