@@ -21,6 +21,7 @@ from pathlib import Path
 
 import numpy as np
 import timm
+import timm.data
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as T
@@ -198,22 +199,43 @@ def main():
     head = list(model.get_classifier().parameters())
     head_ids = {id(p) for p in head}
     backbone = [p for p in model.parameters() if id(p) not in head_ids]
-    opt = torch.optim.AdamW([{"params": backbone, "lr": a.lr}, {"params": head, "lr": a.lr * a.head_lr_mult}],
-                            weight_decay=a.weight_decay)
     steps_per_epoch = len(train_loader)
     total, warm = a.epochs * steps_per_epoch, max(1, steps_per_epoch // 2)
-    lam = lambda s: (s + 1) / warm if s < warm else max(0.01, 0.5 * (1 + math.cos(math.pi * (s - warm) / max(1, total - warm))))
-    sched = torch.optim.lr_scheduler.LambdaLR(opt, lam)
+    unfreeze = min(a.head_epochs, a.epochs) * steps_per_epoch
+
+    def warm_cosine(start):
+        """0 before `start`, linear warmup over `warm` steps, then cosine to 1% at the end of training.
+        The backbone gets its own warmup when it is unfrozen, instead of jumping straight to full LR."""
+        def f(s):
+            if s < start:
+                return 0.0
+            s -= start
+            if s < warm:
+                return (s + 1) / warm
+            return max(0.01, 0.5 * (1 + math.cos(math.pi * (s - warm) / max(1, total - start - warm))))
+        return f
+
+    groups, lambdas = [], []
+    for params, lr, start in ((backbone, a.lr, unfreeze), (head, a.lr * a.head_lr_mult, 0)):
+        decay = [p for p in params if p.ndim > 1]
+        no_decay = [p for p in params if p.ndim <= 1]  # norms and biases: no weight decay
+        for ps, wd in ((decay, a.weight_decay), (no_decay, 0.0)):
+            if ps:
+                groups.append({"params": ps, "lr": lr, "weight_decay": wd})
+                lambdas.append(warm_cosine(start))
+    opt = torch.optim.AdamW(groups)
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambdas)
     try:
         scaler = torch.amp.GradScaler("cuda", enabled=amp)
     except Exception:
         scaler = torch.cuda.amp.GradScaler(enabled=amp)
 
     def save(path, state, temperature, metrics=None):
-        torch.save({"model_name": a.model, "classes": MATERIALS, "img_size": a.img_size, "mean": mean, "std": std,
-                    "temperature": temperature, "state_dict": state, "metrics": metrics or {}}, path)
+        torch.save({"model_name": a.model, "classes": list(MATERIALS), "img_size": a.img_size,
+                    "mean": [float(v) for v in mean], "std": [float(v) for v in std],
+                    "temperature": float(temperature), "state_dict": state, "metrics": metrics or {}}, path)
 
-    best_f1, best_state, t0 = -1.0, None, time.time()
+    best_f1, best_state, best_epoch, t0 = -1.0, None, 0, time.time()
     for epoch in range(a.epochs):
         head_only = epoch < a.head_epochs
         for p in backbone:
@@ -242,7 +264,8 @@ def main():
         if vm["macro_f1"] > best_f1:
             best_f1 = vm["macro_f1"]
             best_state = copy.deepcopy({k: v.detach().cpu() for k, v in model.state_dict().items()})
-            save(out / "best.pt", best_state, 1.0)
+            save(out / "best.pt", best_state, 1.0, {"best_epoch": epoch + 1, "val_macro_f1": best_f1})
+            best_epoch = epoch + 1
 
     model.load_state_dict(best_state)
     vl, vy = collect_logits(model, val_loader, device, amp)
@@ -251,7 +274,9 @@ def main():
     tm = compute_metrics(tl, ty, [s.source for s in te_s])
     tm["temperature"] = temp
     tm["split_mode"] = a.split_mode
-    summary = {"split_mode": a.split_mode, "accuracy": tm["accuracy"], "macro_f1": tm["macro_f1"],
+    tm["best_epoch"] = best_epoch
+    summary = {"split_mode": a.split_mode, "best_epoch": best_epoch, "val_macro_f1": best_f1, "temperature": temp,
+               "accuracy": tm["accuracy"], "macro_f1": tm["macro_f1"],
                "bin_accuracy": tm["bin_accuracy"], "per_source": tm["per_source"]}
     if cross:
         cl, cy = collect_logits(model, mk(cross, t_eval, False), device, amp)
@@ -261,11 +286,16 @@ def main():
         tm["cross_domain"]["eval_source"] = a.cross_eval_source
         summary["cross_domain"] = tm["cross_domain"]
     (out / "metrics.json").write_text(json.dumps(tm, indent=2))
-    plot_confusion(tm["confusion_matrix"], out / "confusion_matrix.png")
-    save(out / "best.pt", best_state, temp, summary)
+    save(out / "best.pt", best_state, temp, summary)  # save before plotting so a plotting error can't lose it
+    try:
+        plot_confusion(tm["confusion_matrix"], out / "confusion_matrix.png")
+    except Exception as e:  # e.g. matplotlib missing
+        print(f"[warn] confusion matrix plot skipped: {e}")
     print_report(tm)
     print("TEST:", json.dumps(summary, indent=2))
-    print(f"saved to {out/'best.pt'} (fitted T={temp:.3f}; inference clamps T to >= 1.0 by default)")
+    note = " (<1: the model is under-confident, expected with label smoothing)" if temp < 1 else ""
+    print(f"saved to {out/'best.pt'}: best epoch {best_epoch}, fitted T={temp:.3f}{note}; "
+          f"inference clamps T to >= 1.0 by default (PipelineConfig.min_temperature)")
 
 
 if __name__ == "__main__":

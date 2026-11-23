@@ -37,9 +37,8 @@ def _has_images(p: Path) -> bool:
 def scan_class_folders(root: Path, source: str) -> List[Sample]:
     """Recursively find folders whose name maps to a known material and collect their images."""
     out: List[Sample] = []
-    for d, _, files in os.walk(root):
-        if "__MACOSX" in d or "/.git" in d:
-            continue
+    for d, dirs, files in os.walk(root):
+        dirs[:] = sorted(x for x in dirs if x not in ("__MACOSX", ".git"))  # prune instead of walking .git
         cls = normalize_label(Path(d).name)
         if cls is None:
             continue
@@ -148,7 +147,7 @@ def split_samples(samples: List[Sample], val_frac=0.1, test_frac=0.1, seed=42, m
         size = max(5, min(chunk, n // 10))
         chunks = [items[i:i + size] for i in range(0, n, size)]
         rng.shuffle(chunks)
-        n_te, n_va = round(n * test_frac), round(n * val_frac)
+        n_te, n_va = max(1, round(n * test_frac)), max(1, round(n * val_frac))
         got_te = got_va = 0
         for c in chunks:
             if got_te < n_te:

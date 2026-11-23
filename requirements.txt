@@ -1,13 +1,14 @@
-torch
-torchvision
-timm
-open_clip_torch
-huggingface_hub
-scikit-learn
-matplotlib
-numpy
-Pillow
-fastapi
-uvicorn
-python-multipart
-requests
+# Kaggle images already ship torch/torchvision/numpy/Pillow/scikit-learn/matplotlib; the notebook installs the rest.
+torch>=2.1
+torchvision>=0.16
+timm>=0.9.16
+open_clip_torch>=2.24
+huggingface_hub>=0.20
+scikit-learn>=1.2
+matplotlib>=3.7
+numpy>=1.24
+Pillow>=10.0
+fastapi>=0.110
+uvicorn>=0.27
+python-multipart>=0.0.9
+requests>=2.31

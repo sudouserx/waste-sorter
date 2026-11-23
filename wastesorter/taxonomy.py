@@ -64,14 +64,37 @@ _SYNONYMS = {
     "textile": "textile",
 }
 
+# Folder names accepted for a bin-labelled evaluation set (evaluate.py --folder), after the same normalisation.
+_BIN_SYNONYMS = {
+    "recyclable": "recyclable", "recycle": "recyclable", "recycling": "recyclable",
+    "compost": "organic", "organicbin": "organic",
+    "nonrecyclable": "non_recyclable", "general": "non_recyclable", "generalwaste": "non_recyclable",
+    "landfill": "non_recyclable", "residual": "non_recyclable",
+    "hazardous": "hazardous", "ewaste": "hazardous", "special": "hazardous",
+    "noitem": NO_ITEM, "empty": NO_ITEM, "background": NO_ITEM,
+}
+
+
+def _key(name: str) -> str:
+    return re.sub(r"[^a-z]", "", name.lower())
+
 
 def normalize_label(folder_name: str) -> Optional[str]:
     """'1-Cardboard' / 'Miscellaneous Trash' / 'Food Organics' -> canonical material, else None."""
-    key = re.sub(r"[^a-z]", "", folder_name.lower())
-    return _SYNONYMS.get(key)
+    return _SYNONYMS.get(_key(folder_name))
+
+
+def label_to_bin(folder_name: str) -> Optional[str]:
+    """Folder name of a bin-labelled set -> bin (or NO_ITEM). Accepts bin names/aliases and material names."""
+    k = _key(folder_name)
+    if k in _BIN_SYNONYMS:
+        return _BIN_SYNONYMS[k]
+    mat = _SYNONYMS.get(k)
+    return MATERIAL_TO_BIN[mat] if mat else None
 
 
 # (description, target) where target is a bin or NO_ITEM. Used for zero-shot CLIP.
+# Local rules differ: e.g. many cities take EMPTY aerosol cans with metal recycling, and some refuse plastic bags.
 ITEM_PROMPTS: List[Tuple[str, str]] = [
     # recyclable
     ("a plastic bottle", "recyclable"), ("a glass bottle", "recyclable"), ("a glass jar", "recyclable"),
@@ -101,7 +124,7 @@ ITEM_PROMPTS: List[Tuple[str, str]] = [
     ("an electronic cable", "hazardous"), ("a paint can", "hazardous"),
     ("an aerosol spray can", "hazardous"), ("a syringe", "hazardous"),
     ("a bottle of pills", "hazardous"),
-    # no waste item in view
+    # no waste item in view (scene prompts; they get scene templates, not "a piece of rubbish" templates)
     ("an empty table", NO_ITEM), ("a blank wall", NO_ITEM), ("an empty floor", NO_ITEM),
     ("a person's face", NO_ITEM), ("an empty room", NO_ITEM),
 ]

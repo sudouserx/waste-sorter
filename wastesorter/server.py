@@ -1,10 +1,11 @@
 """FastAPI server for the mobile app.
 
 POST /predict   multipart: file=<jpeg/png>, optional session_id=<str> (live-feed smoothing)
-GET  /health    liveness + model info
+GET  /health    liveness + model info (no API key needed)
 GET  /bins      bin names / display strings
 
-Env: WASTE_CKPT, WASTE_API_KEY, WASTE_USE_CLIP (1/0), WASTE_W_SUP, WASTE_CONF, WASTE_NO_ITEM, WASTE_CLIP_AGG
+Env: WASTE_CKPT, WASTE_API_KEY, WASTE_USE_CLIP (1/0), WASTE_W_SUP, WASTE_CONF, WASTE_NO_ITEM, WASTE_CLIP_AGG,
+     WASTE_CORS_ORIGINS (comma list, only needed for browser clients such as Expo web; native apps ignore CORS)
 """
 import hmac
 import os
@@ -13,12 +14,14 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
-from PIL import UnidentifiedImageError
+from PIL import Image, UnidentifiedImageError
 
 from .pipeline import PipelineConfig, WastePredictor, load_image
 from .taxonomy import BIN_INFO, BINS
 
 MAX_BYTES = 10 * 1024 * 1024
+MAX_SESSION_ID = 128
+Image.MAX_IMAGE_PIXELS = 50_000_000  # reject decompression bombs early (a 10 MB file can claim huge dimensions)
 state = {}
 _lock = threading.Lock()  # one GPU, serialize inference
 
@@ -38,7 +41,14 @@ async def lifespan(app: FastAPI):
     state.clear()
 
 
-app = FastAPI(title="Waste Sorter API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Waste Sorter API", version="0.2.0", lifespan=lifespan)
+
+_origins = [o.strip() for o in os.environ.get("WASTE_CORS_ORIGINS", "").split(",") if o.strip()]
+if _origins:
+    from fastapi.middleware.cors import CORSMiddleware
+
+    app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_methods=["GET", "POST"],
+                       allow_headers=["X-API-Key", "Content-Type"])
 
 
 def check_key(x_api_key: Optional[str] = Header(default=None)):
@@ -61,12 +71,19 @@ def bins():
 
 @app.post("/predict", dependencies=[Depends(check_key)])
 def predict(file: UploadFile = File(...), session_id: Optional[str] = Form(default=None)):
+    predictor = state.get("predictor")
+    if predictor is None:
+        raise HTTPException(status_code=503, detail="model not loaded")
+    if session_id is not None and len(session_id) > MAX_SESSION_ID:
+        raise HTTPException(status_code=422, detail=f"session_id longer than {MAX_SESSION_ID} characters")
     data = file.file.read(MAX_BYTES + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="empty file")
     if len(data) > MAX_BYTES:
         raise HTTPException(status_code=413, detail="image larger than 10 MB")
     try:
         img = load_image(data)
-    except (UnidentifiedImageError, OSError):
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
         raise HTTPException(status_code=400, detail="could not decode image")
     with _lock:
-        return state["predictor"].predict(img, session_id=session_id)
+        return predictor.predict(img, session_id=session_id or None)
