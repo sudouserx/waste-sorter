@@ -165,8 +165,11 @@ print("latency ms (median of 12, first call includes warm-up):", sorted(lat)[len
 del predictor; gc.collect(); torch.cuda.empty_cache()
 
 # %% [markdown]
-# ## Serve the API + public tunnel (interactive sessions only)
+# ## Serve the web app + API through a public link (interactive sessions only)
 # Starts uvicorn on :8000, checks it locally, then opens a Cloudflare quick tunnel (no account needed).
+# The public link opens a small web app (upload or take a photo -> which bin). The same server still exposes
+# `POST /predict` for the mobile app. The printed link carries the API key after `#`, which browsers never send
+# to the server; the page stores it and removes it from the address bar.
 # The URL changes on every run and the Kaggle session is temporary: development and demos only.
 #
 # Why the first run failed: the old cell read the URL from cloudflared's log as soon as it was printed, which is
@@ -212,6 +215,8 @@ else:
         r = requests.post("http://127.0.0.1:8000/predict", headers={"X-API-Key": API_KEY},
                           files={"file": ("photo.jpg", f, "image/jpeg")}, data={"session_id": "local"}, timeout=60)
     print("local /predict:", r.status_code, json.dumps(r.json(), indent=2))
+    ui = requests.get("http://127.0.0.1:8000/", timeout=10)
+    print("local web app:", ui.status_code, ui.headers.get("content-type"))
 
 # %%
 if not IS_BATCH:
@@ -293,12 +298,16 @@ if not IS_BATCH and PUBLIC_URL:
         print("Public check failed. The local check above passed, so try the URL from your phone anyway; "
               "if that fails too, re-run the tunnel cell to get a new URL. Tail of tunnel.log:")
         print(open(TUNNEL_LOG).read()[-1500:])
-    print(f"\nMobile app settings -> base URL: {PUBLIC_URL}   header X-API-Key: {API_KEY}")
+    APP_LINK = f"{PUBLIC_URL}/#key={API_KEY}"
+    from IPython.display import HTML, display as _display
+    _display(HTML(f'<p style="font-size:1.2em">Web app: <a href="{APP_LINK}" target="_blank">{APP_LINK}</a></p>'))
+    print("Web app (open on your phone or laptop):", APP_LINK)
+    print(f"Mobile app / API -> base URL: {PUBLIC_URL}   header X-API-Key: {API_KEY}")
 
 # %%
 # Keep the API up for KEEPALIVE_MIN minutes (interrupt the kernel to stop earlier).
 if not IS_BATCH:
-    print(f"serving {PUBLIC_URL} for {KEEPALIVE_MIN} min")
+    print(f"serving {APP_LINK if 'APP_LINK' in globals() else PUBLIC_URL} for {KEEPALIVE_MIN} min")
     try:
         end = time.time() + KEEPALIVE_MIN * 60
         while time.time() < end:

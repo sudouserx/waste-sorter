@@ -1,5 +1,6 @@
 """FastAPI server for the mobile app.
 
+GET  /          web app: upload / take a photo, see the bin (open it as <url>/#key=<API key>)
 POST /predict   multipart: file=<jpeg/png>, optional session_id=<str> (live-feed smoothing)
 GET  /health    liveness + model info (no API key needed)
 GET  /bins      bin names / display strings
@@ -11,15 +12,18 @@ import hmac
 import os
 import threading
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from PIL import Image, UnidentifiedImageError
 
 from .pipeline import PipelineConfig, WastePredictor, load_image
 from .taxonomy import BIN_INFO, BINS
 
 MAX_BYTES = 10 * 1024 * 1024
+UI_FILE = Path(__file__).resolve().parent / "static" / "index.html"
 MAX_SESSION_ID = 128
 Image.MAX_IMAGE_PIXELS = 50_000_000  # reject decompression bombs early (a 10 MB file can claim huge dimensions)
 state = {}
@@ -57,10 +61,18 @@ def check_key(x_api_key: Optional[str] = Header(default=None)):
         raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
 
 
+@app.get("/", include_in_schema=False)
+def ui():
+    """The web app. It reads the API key from the link's #key=... fragment (never sent to the server in the URL)."""
+    if not UI_FILE.is_file():
+        raise HTTPException(status_code=404, detail="web UI not bundled")
+    return FileResponse(UI_FILE, media_type="text/html", headers={"Cache-Control": "no-store"})
+
+
 @app.get("/health")
 def health():
     p = state.get("predictor")
-    return {"ok": p is not None, "classifier": bool(p and p.model is not None),
+    return {"ok": p is not None, "auth": bool(os.environ.get("WASTE_API_KEY")), "classifier": bool(p and p.model is not None),
             "clip": bool(p and p.clip is not None), "info": p.model_info if p else {}}
 
 

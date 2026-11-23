@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Which bin?</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>♻️</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,800&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #eef2ee;
+  --surface: #ffffff;
+  --ink: #1d2a23;
+  --muted: #5b6a61;
+  --line: #cfd8d1;
+  --focus: #2f6fb0;
+  --recyclable: #2f6fb0;
+  --organic: #4f7f2e;
+  --non_recyclable: #5f666b;
+  --hazardous: #9a5a00;
+  --none: #7a847d;
+  --display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --body: "Atkinson Hyperlegible", "Segoe UI", system-ui, -apple-system, sans-serif;
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #141a16;
+    --surface: #1d2520;
+    --ink: #e6ece7;
+    --muted: #9aa89f;
+    --line: #34403a;
+    --focus: #7fb0e6;
+  }
+}
+*, *::before, *::after { box-sizing: inherit; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 1.0625rem/1.5 var(--body);
+  -webkit-font-smoothing: antialiased;
+}
+main { max-width: 34rem; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+header { margin-bottom: 1.25rem; }
+h1 {
+  font: 800 clamp(2.4rem, 9vw, 3.4rem)/0.95 var(--display);
+  letter-spacing: -0.03em;
+  margin: 0 0 0.4rem;
+}
+.lede { margin: 0; color: var(--muted); max-width: 30ch; }
+
+/* Drop zone: the "bin opening" */
+.drop {
+  position: relative;
+  border: 2px dashed var(--line);
+  border-radius: 1.25rem 1.25rem 0.5rem 0.5rem;
+  background: var(--surface);
+  padding: 1.5rem 1.25rem;
+  text-align: left;
+  transition: border-color .15s, background .15s;
+}
+.drop.over { border-color: var(--recyclable); background: color-mix(in srgb, var(--recyclable) 8%, var(--surface)); }
+.drop p { margin: 0 0 1rem; color: var(--muted); }
+.actions { display: flex; gap: .6rem; flex-wrap: wrap; }
+.btn {
+  appearance: none; border: 0; cursor: pointer;
+  font: 700 1rem/1 var(--body);
+  padding: .85rem 1.15rem; border-radius: .7rem;
+  background: var(--ink); color: var(--bg);
+}
+.btn.secondary { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 2px var(--line); }
+.btn:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.btn:disabled { opacity: .5; cursor: progress; }
+input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+/* Result */
+.result { margin-top: 1.25rem; display: none; }
+.result.show { display: block; }
+.photo {
+  display: block; width: 100%; max-height: 22rem; object-fit: contain;
+  background: var(--surface); border-radius: 1rem 1rem 0 0;
+}
+.verdict {
+  --c: var(--none);
+  background: var(--c); color: #fff;
+  border-radius: 0 0 1rem 1rem;
+  padding: 1.1rem 1.25rem 1.25rem;
+  position: relative;
+}
+.verdict.uncertain {
+  background: repeating-linear-gradient(135deg, var(--c) 0 14px, color-mix(in srgb, var(--c) 82%, #000) 14px 28px);
+}
+.verdict .kicker { margin: 0; font-weight: 700; opacity: .9; }
+.verdict h2 { font: 800 clamp(1.9rem, 7vw, 2.5rem)/1.05 var(--display); letter-spacing: -0.02em; margin: .15rem 0 .5rem; }
+.verdict .tip { margin: 0; max-width: 40ch; }
+.meter { margin-top: 1rem; height: .45rem; border-radius: 1rem; background: rgba(255,255,255,.3); overflow: hidden; }
+.meter span { display: block; height: 100%; background: #fff; width: 0; transition: width .5s ease-out; }
+.meter-label { font-size: .9rem; margin-top: .35rem; opacity: .9; }
+.loading .verdict h2::after { content: ""; display: inline-block; width: 1ch; animation: dots 1s steps(4) infinite; }
+@keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+
+details { margin-top: 1rem; background: var(--surface); border-radius: .8rem; padding: .2rem 1rem; }
+summary { cursor: pointer; font-weight: 700; padding: .7rem 0; }
+.why h3 { font: 700 .95rem/1.3 var(--body); color: var(--muted); margin: .6rem 0 .4rem; }
+.bars { display: grid; grid-template-columns: auto 1fr auto; gap: .4rem .7rem; align-items: center; margin-bottom: .6rem; }
+.bars .track { height: .5rem; background: var(--line); border-radius: 1rem; overflow: hidden; }
+.bars .fill { height: 100%; border-radius: 1rem; }
+.bars .num { font-variant-numeric: tabular-nums; color: var(--muted); font-size: .95rem; }
+.why ul { margin: 0 0 .8rem; padding-left: 1.1rem; }
+.why li { margin: .1rem 0; }
+.why .num { color: var(--muted); }
+.again { margin-top: 1rem; }
+
+.error { margin-top: 1rem; padding: .9rem 1rem; border-radius: .8rem; background: var(--surface); border-left: 4px solid var(--hazardous); display: none; }
+.error.show { display: block; }
+.key { margin-top: 1rem; display: none; background: var(--surface); padding: 1rem; border-radius: .8rem; }
+.key.show { display: block; }
+.key label { display: block; font-weight: 700; margin-bottom: .4rem; }
+.key .row { display: flex; gap: .5rem; }
+.key input { flex: 1; min-width: 0; font: inherit; padding: .7rem .8rem; border-radius: .6rem; border: 2px solid var(--line); background: var(--bg); color: var(--ink); }
+.key small { display: block; color: var(--muted); margin-top: .4rem; }
+footer { margin-top: 2rem; color: var(--muted); font-size: .9rem; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Which bin?</h1>
+    <p class="lede">Photograph one piece of rubbish and see where it goes.</p>
+  </header>
+
+  <section class="drop" id="drop" aria-label="Add a photo">
+    <p>Fill the frame with a single item. You can also drag a photo here or paste one.</p>
+    <div class="actions">
+      <button class="btn" id="cameraBtn" type="button">Take a photo</button>
+      <button class="btn secondary" id="pickBtn" type="button">Choose a photo</button>
+    </div>
+    <input type="file" id="camera" accept="image/*" capture="environment" tabindex="-1" aria-hidden="true">
+    <input type="file" id="picker" accept="image/*" tabindex="-1" aria-hidden="true">
+  </section>
+
+  <div class="key" id="keyBox">
+    <label for="keyInput">Access key</label>
+    <div class="row">
+      <input id="keyInput" autocomplete="off" spellcheck="false" placeholder="Paste the X-API-Key from the notebook">
+      <button class="btn" id="keySave" type="button">Save key</button>
+    </div>
+    <small id="keyHint">The notebook prints a link that already includes the key.</small>
+  </div>
+
+  <div class="error" id="error" role="alert"></div>
+
+  <section class="result" id="result" aria-live="polite">
+    <img class="photo" id="photo" alt="Your photo">
+    <div class="verdict" id="verdict">
+      <p class="kicker" id="kicker">Checking</p>
+      <h2 id="binName">Looking</h2>
+      <p class="tip" id="tip"></p>
+      <div class="meter" id="meter" hidden><span id="meterFill"></span></div>
+      <div class="meter-label" id="meterLabel" hidden></div>
+    </div>
+    <details id="details" hidden>
+      <summary>How it decided</summary>
+      <div class="why" id="why"></div>
+    </details>
+    <button class="btn secondary again" id="again" type="button">Check another item</button>
+  </section>
+
+  <footer id="footer">Results are a best guess. Local rules vary, so check your council’s guidance when unsure.</footer>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const BIN = {
+    recyclable:     { name: "Recycling",               color: "var(--recyclable)" },
+    organic:        { name: "Compost",                 color: "var(--organic)" },
+    non_recyclable: { name: "General waste",           color: "var(--non_recyclable)" },
+    hazardous:      { name: "Special drop-off",        color: "var(--hazardous)" },
+  };
+  const MAX_SIDE = 1280;
+  let busy = false;
+
+  // ---- access key: from #key=... in the link, else remembered, else typed in ----
+  const store = {
+    get() { try { return localStorage.getItem("wasteKey") || ""; } catch { return ""; } },
+    set(v) { try { localStorage.setItem("wasteKey", v); } catch {} },
+  };
+  let apiKey = store.get();
+  const hashKey = new URLSearchParams(location.hash.slice(1)).get("key");
+  if (hashKey) {
+    apiKey = hashKey; store.set(hashKey);
+    history.replaceState(null, "", location.pathname);   // keep the key out of the address bar
+  }
+  let authRequired = true;
+  fetch("health").then(r => r.json()).then(h => {
+    authRequired = h.auth !== false;
+    if (authRequired && !apiKey) showKey();
+    if (!h.ok) showError("The model is still loading. Try again in a minute.");
+  }).catch(() => {});
+
+  function showKey(rejected) {
+    $("keyBox").classList.add("show");
+    $("keyHint").textContent = rejected
+      ? "That key was rejected. Copy the X-API-Key printed by the notebook."
+      : "The notebook prints a link that already includes the key.";
+    $("keyInput").focus();
+  }
+  $("keySave").onclick = () => {
+    const v = $("keyInput").value.trim();
+    if (!v) return;
+    apiKey = v; store.set(v);
+    $("keyBox").classList.remove("show");
+    hideError();
+  };
+  $("keyInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("keySave").click(); });
+
+  // ---- inputs ----
+  $("cameraBtn").onclick = () => $("camera").click();
+  $("pickBtn").onclick = () => $("picker").click();
+  for (const id of ["camera", "picker"]) {
+    $(id).addEventListener("change", (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) handle(f); });
+  }
+  const drop = $("drop");
+  ["dragenter", "dragover"].forEach(t => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach(t => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (e) => { const f = [...e.dataTransfer.files].find(f => f.type.startsWith("image/")); if (f) handle(f); });
+  window.addEventListener("paste", (e) => {
+    const item = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith("image/"));
+    if (item) handle(item.getAsFile());
+  });
+  $("again").onclick = () => {
+    $("result").classList.remove("show"); hideError();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    $("cameraBtn").focus();
+  };
+
+  // ---- shrink big phone photos before upload (faster over the tunnel); keeps EXIF rotation ----
+  async function downscale(file) {
+    let bmp;
+    try { bmp = await createImageBitmap(file, { imageOrientation: "from-image" }); }
+    catch { return file; }   // unsupported format in this browser: let the server decode it
+    const s = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(bmp.width * s); c.height = Math.round(bmp.height * s);
+    c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+    bmp.close?.();
+    return await new Promise(res => c.toBlob(b => res(b || file), "image/jpeg", 0.9));
+  }
+
+  async function handle(file) {
+    if (busy) return;
+    if (authRequired && !apiKey) { showKey(); return; }
+    busy = true; setButtons(true); hideError();
+    const blob = await downscale(file);
+    const url = URL.createObjectURL(blob);
+    const photo = $("photo");
+    if (photo.dataset.url) URL.revokeObjectURL(photo.dataset.url);
+    photo.src = url; photo.dataset.url = url;
+    renderLoading();
+    try {
+      const fd = new FormData();
+      fd.append("file", blob, "photo.jpg");
+      const r = await fetch("predict", { method: "POST", headers: apiKey ? { "X-API-Key": apiKey } : {}, body: fd });
+      if (r.status === 401) { $("result").classList.remove("show"); showKey(true); return; }
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `The server answered ${r.status}.`);
+      render(data);
+    } catch (err) {
+      $("result").classList.remove("show");
+      showError(err instanceof TypeError
+        ? "Couldn’t reach the server. The Kaggle session may have stopped; re-run the notebook for a new link."
+        : err.message);
+    } finally {
+      busy = false; setButtons(false);
+    }
+  }
+
+  function setButtons(dis) { $("cameraBtn").disabled = dis; $("pickBtn").disabled = dis; }
+  function showError(msg) { const e = $("error"); e.textContent = msg; e.classList.add("show"); }
+  function hideError() { $("error").classList.remove("show"); }
+
+  function renderLoading() {
+    const res = $("result");
+    res.classList.add("show", "loading");
+    const v = $("verdict");
+    v.className = "verdict"; v.style.setProperty("--c", "var(--none)");
+    $("kicker").textContent = "Checking your photo";
+    $("binName").textContent = "Looking";
+    $("tip").textContent = "";
+    $("meter").hidden = true; $("meterLabel").hidden = true; $("details").hidden = true;
+    res.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function pct(x) { return Math.round(x * 100) + "%"; }
+  function nice(s) { return s.replace(/^an? /, "").replace(/^./, c => c.toUpperCase()); }
+
+  function render(d) {
+    $("result").classList.remove("loading");
+    const v = $("verdict");
+    const b = d.bin ? BIN[d.bin] : null;
+    v.className = "verdict" + (d.status === "uncertain" ? " uncertain" : "");
+    v.style.setProperty("--c", b ? b.color : "var(--none)");
+
+    if (d.status === "no_item") {
+      $("kicker").textContent = "No item found";
+      $("binName").textContent = "Try again";
+      $("tip").textContent = "Hold one item close so it fills most of the photo, against a plain background if you can.";
+      $("meter").hidden = true; $("meterLabel").hidden = true;
+    } else {
+      $("kicker").textContent = d.status === "uncertain" ? "Not sure. Best guess:" : "Put it in";
+      $("binName").textContent = b ? b.name : d.bin_display;
+      $("tip").textContent = d.status === "uncertain"
+        ? `${d.tip} If you can, retake the photo closer up or check your local rules.`
+        : d.tip;
+      $("meter").hidden = false; $("meterLabel").hidden = false;
+      $("meterFill").style.width = "0";
+      requestAnimationFrame(() => requestAnimationFrame(() => { $("meterFill").style.width = pct(d.confidence); }));
+      $("meterLabel").textContent = `${pct(d.confidence)} confident`;
+    }
+    renderWhy(d);
+  }
+
+  function el(tag, attrs = {}, text) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  function renderWhy(d) {
+    const why = $("why"); why.replaceChildren();
+    why.append(el("h3", {}, "Chance for each bin"));
+    const bars = el("div", { class: "bars" });
+    for (const [k, p] of Object.entries(d.bin_probs || {})) {
+      const track = el("div", { class: "track" });
+      const fill = el("div", { class: "fill" });
+      fill.style.width = pct(p); fill.style.background = BIN[k]?.color || "var(--none)";
+      track.append(fill);
+      bars.append(el("span", {}, BIN[k]?.name || k), track, el("span", { class: "num" }, pct(p)));
+    }
+    why.append(bars);
+    if (d.materials?.length) {
+      why.append(el("h3", {}, "Material (trained model)"));
+      const ul = el("ul");
+      d.materials.forEach(m => { const li = el("li", {}, nice(m.label) + " "); li.append(el("span", { class: "num" }, pct(m.prob))); ul.append(li); });
+      why.append(ul);
+    }
+    if (d.items?.length) {
+      why.append(el("h3", {}, "Looks like (CLIP)"));
+      const ul = el("ul");
+      d.items.forEach(m => { const li = el("li", {}, nice(m.label) + " "); li.append(el("span", { class: "num" }, pct(m.prob))); ul.append(li); });
+      why.append(ul);
+    }
+    why.append(el("h3", {}, `Answered in ${Math.round(d.latency_ms)} ms`));
+    $("details").hidden = false;
+  }
+})();
+</script>
+</body>
+</html>

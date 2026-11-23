@@ -1,7 +1,8 @@
 # Waste Sorter MVP
 
 Photo / camera frame -> which bin: **recyclable**, **organic (compost)**, **non_recyclable**, or **hazardous (special drop-off)**.
-Runs on a free Kaggle T4 (16 GB). One FastAPI endpoint for the mobile app.
+Runs on a free Kaggle T4 (16 GB). One FastAPI server with a small web app at `/` (upload or take a photo, see
+the bin) and a `POST /predict` endpoint for the mobile app.
 
 ## Method (hybrid)
 1. **Supervised material classifier**: `convnext_tiny` (ImageNet-22k pretrained, via timm), fine-tuned at 288 px with fp16 AMP on
@@ -28,6 +29,7 @@ curated datasets: expect noticeably lower accuracy on real phone photos. Run the
 ## Layout
 ```
 wastesorter/  taxonomy.py data.py train.py evaluate.py clip_zeroshot.py pipeline.py server.py predict.py
+              static/index.html (web app served at /)
 notebooks/    kaggle_run.py (source) -> kaggle_run.ipynb (python notebooks/build_notebook.py)
 tests/        test_logic.py
 ```
@@ -47,6 +49,12 @@ python -m wastesorter.evaluate --ckpt ckpt/best.pt --folder my_photos/          
 (`plastic/ glass/ ...`). Reports bin accuracy for classifier-only, CLIP-only (sum / max) and fused at w = 0.0 ... 1.0,
 plus the share of "ok" answers, their accuracy, and false "no item" rate. 100-200 phone photos taken where the app
 will be used are worth more than any number on the public datasets.
+
+## Web app
+The notebook prints a link like `https://<random>.trycloudflare.com/#key=<API key>`. Open it on a phone or laptop:
+"Take a photo" opens the camera on phones, "Choose a photo" picks a file, and drag-and-drop / paste work on desktop.
+Photos are shrunk to 1280 px in the browser before upload. The key after `#` is never sent in the URL; the page keeps
+it in local storage and asks for it if it is missing or wrong. The page lives in `wastesorter/static/index.html`.
 
 ## API
 ```

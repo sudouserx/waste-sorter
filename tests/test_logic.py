@@ -102,6 +102,12 @@ def test_load_image_exif():
         assert max(big.size) == 1600
 
 
+def test_web_ui_bundled():
+    ui = Path(__file__).resolve().parents[1] / "wastesorter" / "static" / "index.html"
+    html = ui.read_text()
+    assert 'fetch("predict"' in html and 'fetch("health")' in html, "UI must call the API with relative URLs"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
